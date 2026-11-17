@@ -1,0 +1,190 @@
+# =====================================================================
+#  PrimeiroPasso / Ventrya API - Azure Pipelines (CI + Release)
+#  CI      : build Gradle + testes JUnit + publicação do pacote (.jar)
+#  Release : imagem Docker -> ACR -> deploy no Azure Container Instance
+#  Disparo : somente na branch main (que só recebe código via Pull Request)
+# =====================================================================
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    exclude:
+      - README.md
+      - docs/*
+
+pr: none
+
+# Agente: Microsoft-hosted. Sem paralelismo grátis liberado na organização?
+# Troque pelas 2 linhas comentadas (agente self-hosted do pool "Default").
+pool:
+  vmImage: ubuntu-latest
+#  name: Default
+
+variables:
+  - group: ventrya-vars              # Library > Variable groups (senhas como secret)
+  - name: projectDir
+    value: ventrya-api
+  - name: artifactName
+    value: ventrya-api
+  - name: imageTag
+    value: $(Build.BuildId)
+
+stages:
+# ---------------------------------------------------------------------
+- stage: CI
+  displayName: CI - Build e Testes
+  jobs:
+  - job: Build
+    displayName: Build Gradle + Testes JUnit
+    steps:
+    - checkout: self
+
+    - script: |
+        export JAVA_HOME="${JAVA_HOME_21_X64:-$JAVA_HOME}"
+        echo "JAVA_HOME=$JAVA_HOME"
+        java -version
+      displayName: Configurar Java 21
+
+    - script: |
+        export JAVA_HOME="${JAVA_HOME_21_X64:-$JAVA_HOME}"
+        cd $(projectDir)
+        chmod +x gradlew
+        ./gradlew clean test --tests 'com.ventrya.api.unit.*' --no-daemon
+      displayName: Executar testes automatizados (JUnit 5)
+
+    - task: PublishTestResults@2
+      displayName: Publicar resultados dos testes
+      condition: succeededOrFailed()
+      inputs:
+        testResultsFormat: JUnit
+        testResultsFiles: '$(projectDir)/build/test-results/test/TEST-*.xml'
+        testRunTitle: 'Ventrya API - Testes Unitários'
+        failTaskOnFailedTests: true
+
+    - script: |
+        export JAVA_HOME="${JAVA_HOME_21_X64:-$JAVA_HOME}"
+        cd $(projectDir)
+        ./gradlew bootJar --no-daemon
+      displayName: Gerar pacote (bootJar)
+
+    - script: |
+        set -e
+        OUT="$(Build.ArtifactStagingDirectory)"
+        JAR=$(find $(projectDir)/build/libs -name '*.jar' ! -name '*-plain.jar' | head -n 1)
+        echo "Pacote: $JAR"
+        cp "$JAR" "$OUT/app.jar"
+        cp dockerfiles/Dockerfile "$OUT/Dockerfile"
+        ls -la "$OUT"
+      displayName: Preparar artefato (app.jar + Dockerfile)
+
+    - task: PublishPipelineArtifact@1
+      displayName: Publicar artefato
+      inputs:
+        targetPath: '$(Build.ArtifactStagingDirectory)'
+        artifact: '$(artifactName)'
+
+# ---------------------------------------------------------------------
+- stage: Release
+  displayName: Release - Deploy na Azure (ACR + ACI)
+  dependsOn: CI
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+  - deployment: DeployACI
+    displayName: Deploy da API no Azure Container Instance
+    environment: ventrya-producao
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: $(artifactName)
+
+          - task: AzureCLI@2
+            displayName: Build da imagem e push para o ACR
+            inputs:
+              azureSubscription: 'ventrya-azure'   # nome EXATO da service connection
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                cd "$(Pipeline.Workspace)/$(artifactName)"
+                IMAGE="$ACR_NAME.azurecr.io/ventrya-api:$(imageTag)"
+                echo "$ACR_PASSWORD" | docker login "$ACR_NAME.azurecr.io" -u "$ACR_USERNAME" --password-stdin
+                docker build -t "$IMAGE" -t "$ACR_NAME.azurecr.io/ventrya-api:latest" .
+                docker push "$IMAGE"
+                docker push "$ACR_NAME.azurecr.io/ventrya-api:latest"
+            env:
+              ACR_PASSWORD: $(ACR_PASSWORD)
+
+          - task: AzureCLI@2
+            displayName: Deploy no ACI (variáveis de ambiente)
+            inputs:
+              azureSubscription: 'ventrya-azure'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                cat > aci-app.yaml <<EOF
+                apiVersion: '2019-12-01'
+                location: $(LOCATION)
+                name: $(ACI_APP_NAME)
+                type: Microsoft.ContainerInstance/containerGroups
+                properties:
+                  osType: Linux
+                  restartPolicy: Always
+                  ipAddress:
+                    type: Public
+                    dnsNameLabel: $(DNS_APP)
+                    ports:
+                      - protocol: tcp
+                        port: 8080
+                  containers:
+                    - name: ventrya-api
+                      properties:
+                        image: $(ACR_NAME).azurecr.io/ventrya-api:$(imageTag)
+                        ports:
+                          - port: 8080
+                        resources:
+                          requests:
+                            cpu: 1
+                            memoryInGb: 2
+                        environmentVariables:
+                          - name: DB_URL
+                            value: "$(DB_URL)"
+                          - name: DB_USERNAME
+                            value: "$(DB_USERNAME)"
+                          - name: DB_PASSWORD
+                            secureValue: "${DB_PASSWORD}"
+                          - name: JWT_SECRET
+                            secureValue: "${JWT_SECRET}"
+                          - name: RABBITMQ_HOST
+                            value: "$(RABBITMQ_HOST)"
+                          - name: RABBITMQ_USER
+                            value: "$(RABBITMQ_USER)"
+                          - name: RABBITMQ_PASSWORD
+                            secureValue: "${RABBITMQ_PASSWORD}"
+                EOF
+                az container delete -g "$(RG)" -n "$(ACI_APP_NAME)" --yes || true
+                az container create -g "$(RG)" --file aci-app.yaml -o table
+                rm -f aci-app.yaml
+            env:
+              DB_PASSWORD: $(DB_PASSWORD)
+              JWT_SECRET: $(JWT_SECRET)
+              RABBITMQ_PASSWORD: $(RABBITMQ_PASSWORD)
+
+          - script: |
+              URL="http://$(DNS_APP).$(LOCATION).azurecontainer.io:8080/api/organizations"
+              echo "Verificando $URL"
+              for i in $(seq 1 30); do
+                CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || true)
+                echo "Tentativa $i: HTTP $CODE"
+                if [ "$CODE" = "401" ] || [ "$CODE" = "403" ] || [ "$CODE" = "200" ]; then
+                  echo "API no ar: http://$(DNS_APP).$(LOCATION).azurecontainer.io:8080"
+                  exit 0
+                fi
+                sleep 10
+              done
+              echo "API não respondeu a tempo"; exit 1
+            displayName: Smoke test - API respondendo na nuvem

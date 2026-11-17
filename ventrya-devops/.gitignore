@@ -1,0 +1,14 @@
+# Gradle / build
+.gradle/
+**/build/
+!**/gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Segredos - nunca versionar
+*secrets*.txt
+.env
+aci-app.yaml
