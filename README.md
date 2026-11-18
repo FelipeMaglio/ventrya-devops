@@ -48,7 +48,7 @@ O script cria os recursos, gera as senhas na hora (nenhuma senha fica no código
 
 **CI** (stage `CI`): roda a cada merge na `main`, que só recebe código via Pull Request.
 1. Configura o Java 21.
-2. `./gradlew test`: testes unitários JUnit 5 + Mockito (`AuthService`, `OrganizationService`, `ChallengeService`).
+2. `./gradlew test`: 17 testes unitários JUnit 5 + Mockito (cadastro/login, CRUD de organizações e de desafios).
 3. Publica o resultado dos testes (aba *Tests*).
 4. `./gradlew bootJar`: gera o pacote.
 5. Publica o artefato `ventrya-api` (`app.jar` + `Dockerfile`).
@@ -56,12 +56,12 @@ O script cria os recursos, gera as senhas na hora (nenhuma senha fica no código
 **Release** (stage `Release`): roda automaticamente quando a CI gera um artefato novo.
 1. Baixa o artefato.
 2. Faz o `docker build` e o push para o ACR (tag = número do build).
-3. Recria o ACI da API com as **variáveis de ambiente** (`DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`, `RABBITMQ_*`). As senhas vêm de variáveis secretas.
+3. Recria o ACI da API com as **variáveis de ambiente** (`DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`, `RABBITMQ_URL`). As senhas vêm de variáveis secretas.
 4. Smoke test: confere se a API responde na nuvem.
 
 ### Variáveis (Library → `ventrya-vars`)
 
-`RG`, `LOCATION`, `ACR_NAME`, `ACR_USERNAME`, `ACR_PASSWORD`🔒, `ACI_APP_NAME`, `DNS_APP`, `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`🔒, `JWT_SECRET`🔒, `RABBITMQ_HOST`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`🔒
+`RG`, `LOCATION`, `ACR_NAME`, `ACR_USERNAME`, `ACR_PASSWORD`🔒, `ACI_APP_NAME`, `DNS_APP`, `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`🔒, `JWT_SECRET`🔒, `RABBITMQ_URL`🔒 (`amqp://usuario:senha@host:5672`)
 
 ## Banco de dados
 
@@ -72,36 +72,47 @@ Tabelas: `ventrya_user`, `ventrya_organization`, `ventrya_organization_user`, `v
 ## Testes da API (JSON)
 
 Base URL: `http://ventrya-api-563512.eastus.azurecontainer.io:8080`
+Swagger: `http://ventrya-api-563512.eastus.azurecontainer.io:8080/swagger-ui.html`
 Rotas protegidas usam o header `Authorization: Bearer <token>`.
 
-### Usuários — `ventrya_user`
+### 1. Usuário ADMIN (`ventrya_user`)
+
+O CRUD de organizações e de desafios exige o perfil **ADMIN**. O cadastro cria usuários como `STUDENT`.
 
 **Create** — `POST /api/auth/register`
 ```json
 {
-  "name": "Maria Silva",
-  "email": "maria.silva@teste.com",
+  "name": "Admin Ventrya",
+  "email": "admin@ventrya.com",
   "password": "senha12345",
   "professionalArea": "TECHNOLOGY"
 }
 ```
-`professionalArea`: `TECHNOLOGY` | `ADMINISTRATION` | `MARKETING` | `DESIGN` | `FINANCE` | `OTHER`
 
-**Login** — `POST /api/auth/login`
+Promova o usuário no banco (SQL Developer):
+```sql
+UPDATE ventrya_user SET role = 'ADMIN' WHERE email = 'admin@ventrya.com';
+COMMIT;
+```
+
+**Login** — `POST /api/auth/login`. Use o `token` da resposta nas próximas chamadas.
 ```json
 {
-  "email": "maria.silva@teste.com",
+  "email": "admin@ventrya.com",
   "password": "senha12345"
 }
 ```
 
-**Read** — `GET /api/users/me` (com token)
+### 2. Organizações (`ventrya_organization`)
 
-### Organizações — `ventrya_organization`
+| Operação | Método e rota |
+|---|---|
+| Create | `POST /api/organizations` |
+| Read | `GET /api/organizations` · `GET /api/organizations/{id}` |
+| Update | `PUT /api/organizations/{id}` |
+| Delete | `DELETE /api/organizations/{id}` (só se não tiver desafios vinculados) |
 
-**Read** — `GET /api/organizations?page=0&size=10` · `GET /api/organizations/{id}`
-
-Corpo para Create/Update (`OrganizationRequestDTO`):
+**Create**
 ```json
 {
   "name": "ONG Futuro Jovem",
@@ -111,11 +122,26 @@ Corpo para Create/Update (`OrganizationRequestDTO`):
 }
 ```
 
-### Desafios — `ventrya_challenge`
+**Update**
+```json
+{
+  "name": "ONG Futuro Jovem - Unidade SP",
+  "email": "contato@futurojovem.org",
+  "description": "ONG que apoia jovens de São Paulo em busca do primeiro emprego.",
+  "webSite": "https://futurojovem.org/sp"
+}
+```
 
-**Read** — `GET /api/challenges` · `GET /api/challenges/{id}` · `GET /api/challenges/area/{area}` · `GET /api/challenges/organization/{organizationId}`
+### 3. Desafios (`ventrya_challenge`)
 
-Corpo para Create/Update (`ChallengeRequestDTO`):
+| Operação | Método e rota |
+|---|---|
+| Create | `POST /api/challenges/organization/{organizationId}` |
+| Read | `GET /api/challenges` · `GET /api/challenges/{id}` · `GET /api/challenges/organization/{organizationId}` |
+| Update | `PUT /api/challenges/{id}` |
+| Delete | `DELETE /api/challenges/{id}` (só se não tiver candidaturas) |
+
+**Create**
 ```json
 {
   "title": "Planilha de inscrições do evento",
@@ -127,7 +153,19 @@ Corpo para Create/Update (`ChallengeRequestDTO`):
 }
 ```
 
-> Os endpoints `POST`, `PUT` e `DELETE` de organizações e desafios ainda estão sendo implementados na disciplina de Java Advanced. Esta seção vai ser atualizada com as rotas finais.
+**Update**
+```json
+{
+  "title": "Planilha de inscrições do evento (v2)",
+  "description": "Criar uma planilha com filtros e gráfico para as inscrições do evento comunitário.",
+  "professionalArea": "ADMINISTRATION",
+  "difficulty": "INTERMEDIATE",
+  "requirements": "Excel ou Google Sheets",
+  "deadline": "2026-12-20"
+}
+```
+
+Valores aceitos: `professionalArea` = `TECHNOLOGY` | `ADMINISTRATION` | `MARKETING` | `DESIGN` | `FINANCE` | `OTHER` · `difficulty` = `BEGINNER` | `INTERMEDIATE` | `ADVANCED`
 
 ### Conferência no banco (SQL Developer)
 

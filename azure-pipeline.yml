@@ -159,12 +159,8 @@ stages:
                             secureValue: "${DB_PASSWORD}"
                           - name: JWT_SECRET
                             secureValue: "${JWT_SECRET}"
-                          - name: RABBITMQ_HOST
-                            value: "$(RABBITMQ_HOST)"
-                          - name: RABBITMQ_USER
-                            value: "$(RABBITMQ_USER)"
-                          - name: RABBITMQ_PASSWORD
-                            secureValue: "${RABBITMQ_PASSWORD}"
+                          - name: RABBITMQ_URL
+                            secureValue: "${RABBITMQ_URL}"
                 EOF
                 az container delete -g "$(RG)" -n "$(ACI_APP_NAME)" --yes || true
                 az container create -g "$(RG)" --file aci-app.yaml -o table
@@ -172,7 +168,7 @@ stages:
             env:
               DB_PASSWORD: $(DB_PASSWORD)
               JWT_SECRET: $(JWT_SECRET)
-              RABBITMQ_PASSWORD: $(RABBITMQ_PASSWORD)
+              RABBITMQ_URL: $(RABBITMQ_URL)
 
           - script: |
               URL="http://$(DNS_APP).$(LOCATION).azurecontainer.io:8080/api/organizations"

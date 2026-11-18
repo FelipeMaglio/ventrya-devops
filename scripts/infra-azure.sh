@@ -172,9 +172,7 @@ DB_URL=$DB_URL
 DB_USERNAME=$DB_USERNAME
 DB_PASSWORD=$DB_PASSWORD              [SECRET]
 JWT_SECRET=$JWT_SECRET                [SECRET]
-RABBITMQ_HOST=$MQ_FQDN
-RABBITMQ_USER=$MQ_USER
-RABBITMQ_PASSWORD=$MQ_PASSWORD        [SECRET]
+RABBITMQ_URL=amqp://$MQ_USER:$MQ_PASSWORD@$MQ_FQDN:5672      [SECRET]
 
 # ==== Conexão no SQL Developer (para mostrar os SELECTs no vídeo) ====
 # Host: $DB_FQDN   Porta: 1521   Service name: FREEPDB1
@@ -186,6 +184,7 @@ RABBITMQ_PASSWORD=$MQ_PASSWORD        [SECRET]
 
 # ==== API (depois da 1a Release) ====
 # http://$DNS_APP.$LOCATION.azurecontainer.io:8080
+# Swagger: http://$DNS_APP.$LOCATION.azurecontainer.io:8080/swagger-ui.html
 EOF
 
 echo ""
