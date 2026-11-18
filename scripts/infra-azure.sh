@@ -42,38 +42,109 @@ echo ">> Resource Group: $RG"
 az group create --name "$RG" --location "$LOCATION" -o none
 
 echo ">> ACR: $ACR_NAME (Standard + admin + pull anônimo)"
-az acr create --resource-group "$RG" --name "$ACR_NAME" --sku Standard --admin-enabled true -o none
-az acr update --name "$ACR_NAME" --anonymous-pull-enabled true -o none
+az acr show --name "$ACR_NAME" -o none 2>/dev/null || \
+  az acr create --resource-group "$RG" --name "$ACR_NAME" --sku Standard --admin-enabled true -o none
+az acr update --name "$ACR_NAME" --admin-enabled true --anonymous-pull-enabled true -o none
 ACR_USERNAME=$(az acr credential show --name "$ACR_NAME" --query username -o tsv)
 ACR_PASSWORD=$(az acr credential show --name "$ACR_NAME" --query "passwords[0].value" -o tsv)
+ACR_SERVER="${ACR_NAME}.azurecr.io"
+
+# Importa as imagens para o ACR (evita o rate limit do Docker Hub no ACI)
+import_img() {   # $1 = nome no ACR, demais = fontes em ordem de tentativa
+  local target="$1"; shift
+  if az acr repository show --name "$ACR_NAME" --image "$target" -o none 2>/dev/null; then
+    echo "   $target já está no ACR"; return 0
+  fi
+  for src in "$@"; do
+    echo "   importando $src ..."
+    if az acr import --name "$ACR_NAME" --source "$src" --image "$target" --force -o none; then
+      echo "   OK: $target"; return 0
+    fi
+  done
+  echo "ERRO: não foi possível importar $target"; exit 1
+}
+echo ">> Importando imagens para o ACR"
+import_img "oracle-free:23-slim" ghcr.io/gvenzl/oracle-free:23-slim docker.io/gvenzl/oracle-free:23-slim
+import_img "rabbitmq:3-management" public.ecr.aws/docker/library/rabbitmq:3-management docker.io/library/rabbitmq:3-management
+
+# Cria ACI via YAML (sem credencial de registry: o ACR tem pull anônimo)
+create_aci() {   # $1 = arquivo yaml
+  az container create --resource-group "$RG" --file "$1" -o none
+  rm -f "$1"
+}
 
 echo ">> ACI Oracle: $ACI_DB (pode levar alguns minutos)"
-az container create \
-  --resource-group "$RG" \
-  --name "$ACI_DB" \
-  --image gvenzl/oracle-free:23-slim \
-  --os-type Linux \
-  --cpu 2 --memory 4 \
-  --ports 1521 \
-  --ip-address Public \
-  --dns-name-label "$DNS_DB" \
-  --environment-variables APP_USER="$DB_USERNAME" \
-  --secure-environment-variables ORACLE_PASSWORD="$ORACLE_SYS_PASSWORD" APP_USER_PASSWORD="$DB_PASSWORD" \
-  -o none
+az container delete -g "$RG" -n "$ACI_DB" --yes -o none 2>/dev/null || true
+cat > aci-db.yaml <<EOF
+apiVersion: '2019-12-01'
+location: $LOCATION
+name: $ACI_DB
+type: Microsoft.ContainerInstance/containerGroups
+properties:
+  osType: Linux
+  restartPolicy: Always
+  ipAddress:
+    type: Public
+    dnsNameLabel: $DNS_DB
+    ports:
+      - protocol: tcp
+        port: 1521
+  containers:
+    - name: oracle
+      properties:
+        image: $ACR_SERVER/oracle-free:23-slim
+        ports:
+          - port: 1521
+        resources:
+          requests:
+            cpu: 2
+            memoryInGb: 4
+        environmentVariables:
+          - name: APP_USER
+            value: "$DB_USERNAME"
+          - name: ORACLE_PASSWORD
+            secureValue: "$ORACLE_SYS_PASSWORD"
+          - name: APP_USER_PASSWORD
+            secureValue: "$DB_PASSWORD"
+EOF
+create_aci aci-db.yaml
 
 echo ">> ACI RabbitMQ: $ACI_MQ"
-az container create \
-  --resource-group "$RG" \
-  --name "$ACI_MQ" \
-  --image rabbitmq:3-management \
-  --os-type Linux \
-  --cpu 1 --memory 1.5 \
-  --ports 5672 15672 \
-  --ip-address Public \
-  --dns-name-label "$DNS_MQ" \
-  --environment-variables RABBITMQ_DEFAULT_USER="$MQ_USER" \
-  --secure-environment-variables RABBITMQ_DEFAULT_PASS="$MQ_PASSWORD" \
-  -o none
+az container delete -g "$RG" -n "$ACI_MQ" --yes -o none 2>/dev/null || true
+cat > aci-mq.yaml <<EOF
+apiVersion: '2019-12-01'
+location: $LOCATION
+name: $ACI_MQ
+type: Microsoft.ContainerInstance/containerGroups
+properties:
+  osType: Linux
+  restartPolicy: Always
+  ipAddress:
+    type: Public
+    dnsNameLabel: $DNS_MQ
+    ports:
+      - protocol: tcp
+        port: 5672
+      - protocol: tcp
+        port: 15672
+  containers:
+    - name: rabbitmq
+      properties:
+        image: $ACR_SERVER/rabbitmq:3-management
+        ports:
+          - port: 5672
+          - port: 15672
+        resources:
+          requests:
+            cpu: 1
+            memoryInGb: 1.5
+        environmentVariables:
+          - name: RABBITMQ_DEFAULT_USER
+            value: "$MQ_USER"
+          - name: RABBITMQ_DEFAULT_PASS
+            secureValue: "$MQ_PASSWORD"
+EOF
+create_aci aci-mq.yaml
 
 DB_FQDN=$(az container show -g "$RG" -n "$ACI_DB" --query ipAddress.fqdn -o tsv)
 MQ_FQDN=$(az container show -g "$RG" -n "$ACI_MQ" --query ipAddress.fqdn -o tsv)
