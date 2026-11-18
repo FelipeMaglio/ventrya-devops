@@ -162,8 +162,8 @@ stages:
                           - name: RABBITMQ_URL
                             secureValue: "${RABBITMQ_URL}"
                 EOF
-                az container delete -g "$(RG)" -n "$(ACI_APP_NAME)" --yes || true
-                az container create -g "$(RG)" --file aci-app.yaml -o table
+                az container create -g "$(RG)" --file aci-app.yaml -o none
+                az container show -g "$(RG)" -n "$(ACI_APP_NAME)" --query "{estado:instanceView.state, fqdn:ipAddress.fqdn}" -o table
                 rm -f aci-app.yaml
             env:
               DB_PASSWORD: $(DB_PASSWORD)
