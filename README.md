@@ -1,5 +1,21 @@
 # PrimeiroPasso — Ventrya API · DevOps Tools & Cloud Computing (Global Solution 2026/2)
 
+## Vídeo de demonstração
+
+🎥 **[Assistir no YouTube](https://youtu.be/GLVrh3XGkFc)**
+
+O vídeo mostra o ciclo completo de DevOps do PrimeiroPasso:
+
+1. Tarefa criada no **Azure Boards**
+2. Branch da tarefa e alteração no código Java
+3. **Pull Request** com revisor e work item vinculado, depois o merge na `main`
+4. **Pipeline de CI** disparada automaticamente, com build Gradle, testes JUnit 5 e artefato publicado
+5. **Pipeline de Release** com imagem Docker no ACR e deploy no ACI
+6. Alteração publicada na nuvem (versão 1.1.0 no Swagger)
+7. **CRUD** de organizações e desafios com conferência no banco Oracle
+8. Tarefa concluída com os links de branch, commit e PR
+
+
 ## Solução proposta
 
 O **PrimeiroPasso** é uma plataforma mobile de inclusão profissional para quem busca o primeiro emprego e ainda não tem experiência. Ela junta **desafios práticos supervisionados**, publicados por ONGs e organizações parceiras, que viram projetos no **portfólio** do participante, com um **simulador de entrevistas com IA (EntrevistaLab)**.
