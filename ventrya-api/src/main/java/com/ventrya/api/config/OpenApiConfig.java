@@ -20,7 +20,7 @@ public class OpenApiConfig {
         return new OpenAPI()
                 .info(new Info()
                         .title("Ventrya API")
-                        .version("1.0.0")
+                        .version("1.1.0")
                         .description("""
                                 API REST desenvolvida para a Global Solution
                                 2026/2 da FIAP.
